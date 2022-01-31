@@ -27,3 +27,5 @@ status text NOT NULL,
 buying bool NOT NULL,
 notify_url text	
 );
+
+Do not forget to change the "ConnectionString" to "DefaultDatabase" in "appsettings.json" for your setup. 
