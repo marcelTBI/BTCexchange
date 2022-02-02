@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+
 using BTCexchange.Models;
 using BTCexchange.src;
 
@@ -8,7 +9,7 @@ namespace BTCexchange
     {
 
         public static void Main(string[] args)
-        {            
+        {
             WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
             // Add services to the container.

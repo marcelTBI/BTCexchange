@@ -1,8 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+
 using BTCexchange.Models;
-using System.Net;
-using System.Text;
 
 namespace BTCexchange.Controllers
 {
@@ -11,42 +10,45 @@ namespace BTCexchange.Controllers
     public class OrdersController : ControllerBase
     {
         private readonly BTCexchangeContext _context;
+        public static readonly object orderLock = new object();
 
         public OrdersController(BTCexchangeContext context)
         {
             _context = context;
         }
 
-        public string NotifyUrl(string url, int id)   // This is not tested
+        private static async Task<string> NotifyUrlAsync(string url, int id)   // This is not tested
         {
-            HttpWebRequest rq = (HttpWebRequest)WebRequest.Create(url);
-            using (Stream s = rq.GetRequestStream())
-            {
-                // write data here
-                using (var writer = new BinaryWriter(s, Encoding.UTF8, false))
-                {
-                    writer.Write(id);
-                }
-            }
+            HttpClient client = new HttpClient();
+            Dictionary<string, string> parameters = new Dictionary<string, string> { { "OrderId", id.ToString() } };
+            FormUrlEncodedContent encodedContent = new FormUrlEncodedContent(parameters);
+            HttpResponseMessage response = await client.PostAsync(url, encodedContent);
+            response.EnsureSuccessStatusCode();
+            string responseContent = await response.Content.ReadAsStringAsync();
 
-            string response = "";
-            HttpWebResponse resp = (HttpWebResponse)rq.GetResponse();
-            using (Stream s = resp.GetResponseStream())
-            {
-                using (var reader = new BinaryReader(s, Encoding.UTF8, false))
-                {
-                    response = reader.ReadString();
-                }
-            }
+            return responseContent;
+        }
 
-            return response;
+        private static string NotifyUrl(string url, int id)   // This is not tested
+        {
+            HttpClient client = new HttpClient();
+            Dictionary<string, string> parameters = new Dictionary<string, string> { { "OrderId", id.ToString() } };
+            FormUrlEncodedContent encodedContent = new FormUrlEncodedContent(parameters);
+            Task<HttpResponseMessage> task = Task.Run(() => client.PostAsync(url, encodedContent));
+            task.Wait();
+            HttpResponseMessage response = task.Result;
+            response.EnsureSuccessStatusCode();
+            StreamReader reader = new StreamReader(response.Content.ReadAsStream());
+            string responseContent = reader.ReadToEnd();
+
+            return responseContent;
         }
 
 
-        private async Task<MarketOrderReturn> BuyBTC(long quantity, double? limitPrice = null)
+        private MarketOrderReturn BuyBTC(long quantity, double? limitPrice = null)
         {
             if (limitPrice == null) limitPrice = double.MaxValue;
-            Order[] sellingOrders = await _context.Orders.Where(o => !o.Buying && o.Status == "LIVE" && o.LimitPrice <= limitPrice).OrderBy(o => o.LimitPrice).ToArrayAsync();
+            Order[] sellingOrders = _context.Orders.Where(o => !o.Buying && o.Status == "LIVE" && o.LimitPrice <= limitPrice).OrderBy(o => o.LimitPrice).ToArray();   // maybe do not trade with himself
 
             long remQuantity = quantity;
             long price = 0L;
@@ -57,7 +59,7 @@ namespace BTCexchange.Controllers
                 long processingQuantity = Math.Min(order.RemainQuantity, remQuantity);
                 if (processingQuantity > 0)
                 {
-                    User? user = await _context.Users.FindAsync(order.UserId);
+                    User? user = _context.Users.Find(order.UserId);
                     if (user == null) throw new InvalidOperationException($"Didn't find user {order.UserId} for StandingOrder {order.Id}");
                     remQuantity -= processingQuantity;
                     price += processingQuantity * order.LimitPrice;
@@ -71,9 +73,9 @@ namespace BTCexchange.Controllers
 
                     user.UsdBalance += processingQuantity * order.LimitPrice;
                     _context.Entry(user).State = EntityState.Modified;
-                    await _context.SaveChangesAsync();
+                    _context.SaveChanges();
                 }
-                // notify order via Webhook TODO
+                // notify order via Webhook (maybe move to async, not locked part?)
                 if (order.NotifyUrl != null)
                 {
                     string response = NotifyUrl(order.NotifyUrl, order.Id);
@@ -88,10 +90,10 @@ namespace BTCexchange.Controllers
             return new MarketOrderReturn(quantity - remQuantity, avgPrice);
         }
 
-        private async Task<MarketOrderReturn> SellBTC(long quantity, double? limitPrice = null)
+        private MarketOrderReturn SellBTC(long quantity, double? limitPrice = null)
         {
             if (limitPrice == null) limitPrice = 0.0;
-            Order[] buyingOrders = await _context.Orders.Where(o => o.Buying && o.Status == "LIVE" && o.LimitPrice >= limitPrice).OrderByDescending(o => o.LimitPrice).ToArrayAsync();
+            Order[] buyingOrders = _context.Orders.Where(o => o.Buying && o.Status == "LIVE" && o.LimitPrice >= limitPrice).OrderByDescending(o => o.LimitPrice).ToArray();
 
             long remQuantity = quantity;
             long price = 0L;
@@ -102,7 +104,7 @@ namespace BTCexchange.Controllers
                 long processingQuantity = Math.Min(order.RemainQuantity, remQuantity);
                 if (processingQuantity > 0)
                 {
-                    User? user = await _context.Users.FindAsync(order.UserId);
+                    User? user = _context.Users.Find(order.UserId);
                     if (user == null) throw new InvalidOperationException($"Didn't find user {order.UserId} for StandingOrder {order.Id}");
                     remQuantity -= processingQuantity;
                     price += processingQuantity * order.LimitPrice;
@@ -116,9 +118,9 @@ namespace BTCexchange.Controllers
 
                     user.BtcBalance += processingQuantity;
                     _context.Entry(user).State = EntityState.Modified;
-                    await _context.SaveChangesAsync();
+                    _context.SaveChanges();
                 }
-                // notify order via Webhook TODO
+                // notify order via Webhook (maybe move to async, not locked part?)
                 if (order.NotifyUrl != null)
                 {
                     string response = NotifyUrl(order.NotifyUrl, order.Id);
@@ -132,38 +134,31 @@ namespace BTCexchange.Controllers
             return new MarketOrderReturn(quantity - remQuantity, avgPrice);
         }
 
-        private async Task<MarketOrderReturn> FulfillOrder(long quantity, string type, User user, double? limitPrice = null)
+        private MarketOrderReturn FulfillOrder(long quantity, bool buying, User user, double? limitPrice = null)
         {
-            switch (type)
+            if (buying)
             {
-                case "BUY":
-                    {
-                        MarketOrderReturn ret = await BuyBTC(quantity, limitPrice);
-                        if (ret.quantity > 0)
-                        {
-                            user.BtcBalance += ret.quantity;
-                            user.UsdBalance -= (long)(ret.avgPrice * ret.quantity);
-                            _context.Entry(user).State = EntityState.Modified;
-                            await _context.SaveChangesAsync();
-                        }
-                        return ret;
-                    }
-                case "SELL":
-                    {
-                        MarketOrderReturn ret = await SellBTC(quantity, limitPrice);
-                        if (ret.quantity > 0)
-                        {
-                            user.BtcBalance -= ret.quantity;
-                            user.UsdBalance += (long)(ret.avgPrice * ret.quantity);
-                            _context.Entry(user).State = EntityState.Modified;
-                            await _context.SaveChangesAsync();
-                        }
-                        return ret;
-                    }
-                default:
-                    {
-                        throw new InvalidOperationException("Invalid type (BUY or SELL accepted): " + type);
-                    }
+                MarketOrderReturn ret = BuyBTC(quantity, limitPrice);
+                if (ret.Quantity > 0)
+                {
+                    user.BtcBalance += ret.Quantity;
+                    user.UsdBalance -= (long)(ret.AvgPrice * ret.Quantity);
+                    _context.Entry(user).State = EntityState.Modified;
+                    _context.SaveChanges();
+                }
+                return ret;
+            }
+            else
+            {
+                MarketOrderReturn ret = SellBTC(quantity, limitPrice);
+                if (ret.Quantity > 0)
+                {
+                    user.BtcBalance -= ret.Quantity;
+                    user.UsdBalance += (long)(ret.AvgPrice * ret.Quantity);
+                    _context.Entry(user).State = EntityState.Modified;
+                    _context.SaveChanges();
+                }
+                return ret;
             }
         }
 
@@ -179,7 +174,12 @@ namespace BTCexchange.Controllers
             User? user = await _context.FindUserByToken(token);
             if (user == null) return NotFound();
 
-            return await FulfillOrder(quantity, type, user);
+            bool buying = IsBuying(type);
+
+            lock (orderLock)
+            {
+                return FulfillOrder(quantity, buying, user);
+            }
         }
 
         // GET: api/Orders
@@ -214,17 +214,23 @@ namespace BTCexchange.Controllers
             return order.ToDTO();
         }
 
-        private bool CanPerformOrder(long quantity, string type, long limitPrice, User user)
+        private static bool CanPerformOrder(long quantity, bool buying, long limitPrice, User user)
+        {
+            if (buying) return user.UsdBalance >= limitPrice * quantity;
+            else return user.BtcBalance >= quantity;
+        }
+
+        private static bool IsBuying(string type)
         {
             switch (type)
             {
                 case "BUY":
                     {
-                        return user.UsdBalance >= limitPrice * quantity;
+                        return true;
                     }
                 case "SELL":
                     {
-                        return user.BtcBalance >= quantity;
+                        return false;
                     }
                 default:
                     {
@@ -247,58 +253,45 @@ namespace BTCexchange.Controllers
 
             // create (partial) order
             Order order = new Order();
-            switch (type)
-            {
-                case "BUY":
-                    {
-                        order.Buying = true;
-                        break;
-                    }
-                case "SELL":
-                    {
-                        order.Buying = false;
-                        break;
-                    }
-                default:
-                    {
-                        throw new InvalidOperationException("Invalid type (BUY or SELL accepted): " + type);
-                    }
-            }
-            order.Status = CanPerformOrder(quantity, type, limitPrice, user) ? "LIVE" : "CANCELED";
             order.UserId = user.Id;
             order.LimitPrice = limitPrice;
             order.NotifyUrl = webhookUrl;
-
+            order.Buying = IsBuying(type);
             order.FilledQuantity = 0L;
             order.RemainQuantity = quantity;
             order.AvgPrice = 0L;
 
-            // try to fulfill the order                       
-            if (order.Status == "LIVE")
+            lock (orderLock)
             {
-                MarketOrderReturn mor = await FulfillOrder(quantity, type, user, limitPrice);
-                order.FilledQuantity += mor.quantity;
-                order.RemainQuantity -= mor.quantity;
-                order.AvgPrice = mor.avgPrice;
-                if (order.RemainQuantity == 0) order.Status = "FULFILLED";
+                order.Status = CanPerformOrder(quantity, order.Buying, limitPrice, user) ? "LIVE" : "CANCELED";
 
-                // subtract the resources from the user
-                if (order.Buying)
+                // try to fulfill the order                       
+                if (order.Status == "LIVE")
                 {
-                    user.BtcBalance += mor.quantity;
-                    user.UsdBalance -= quantity * limitPrice;
+                    MarketOrderReturn mor = FulfillOrder(quantity, order.Buying, user, limitPrice);
+                    order.FilledQuantity += mor.Quantity;
+                    order.RemainQuantity -= mor.Quantity;
+                    order.AvgPrice = mor.AvgPrice;
+                    if (order.RemainQuantity == 0) order.Status = "FULFILLED";
+
+                    // subtract the resources from the user
+                    if (order.Buying)
+                    {
+                        user.BtcBalance += mor.Quantity;
+                        user.UsdBalance -= quantity * limitPrice;
+                    }
+                    else
+                    {
+                        user.BtcBalance -= quantity;
+                        user.UsdBalance += (long)(mor.Quantity * mor.AvgPrice);
+                    }
                 }
-                else
-                {
-                    user.BtcBalance -= quantity;
-                    user.UsdBalance += (long)(mor.quantity * mor.avgPrice);
-                }
+
+                // put the changes in the db:
+                _context.Entry(user).State = EntityState.Modified;
+                _context.Orders.Add(order);
+                _context.SaveChanges();
             }
-
-            // put the changes in the db:
-            _context.Entry(user).State = EntityState.Modified;
-            _context.Orders.Add(order);
-            await _context.SaveChangesAsync();
 
             return order.Id;
         }
@@ -315,38 +308,36 @@ namespace BTCexchange.Controllers
             User? userAuth = await _context.FindUserByToken(token);
             if (userAuth == null) return NotFound();
 
-            // search for order
-            var order = await _context.Orders.FindAsync(id);
-            if (order == null)
+            lock (orderLock)
             {
-                return NotFound();
+                // search for order
+                Order? order = _context.Orders.Find(id);
+                if (order == null)
+                {
+                    return NotFound();
+                }
+                if (order.UserId != userAuth.Id) return Unauthorized($"Order {id} does not belong to the Authorized User");
+
+                // return allocated resources to user
+                User? user = _context.Users.Find(order.UserId);
+                if (user == null) throw new InvalidOperationException($"Didn't find user {order.UserId} for StandingOrder {order.Id}");
+
+                if (order.Buying && order.RemainQuantity > 0 && order.Status == "LIVE")
+                {
+                    user.UsdBalance += order.RemainQuantity * order.LimitPrice;
+                    _context.Entry(user).State = EntityState.Modified;
+                }
+                if (!order.Buying && order.RemainQuantity > 0 && order.Status == "LIVE")
+                {
+                    user.BtcBalance += order.RemainQuantity;
+                    _context.Entry(user).State = EntityState.Modified;
+                }
+
+                // update database
+                _context.Orders.Remove(order);
+                _context.SaveChanges();
             }
-            if (order.UserId != userAuth.Id) return Unauthorized($"Order {id} does not belong to the Authorized User");
-
-            // return allocated resources to user
-            User? user = await _context.Users.FindAsync(order.UserId);
-            if (user == null) throw new InvalidOperationException($"Didn't find user {order.UserId} for StandingOrder {order.Id}");
-
-            if (order.Buying && order.RemainQuantity > 0 && order.Status == "LIVE")
-            {
-                user.UsdBalance += order.RemainQuantity * order.LimitPrice;
-            }
-            if (!order.Buying && order.RemainQuantity > 0 && order.Status == "LIVE")
-            {
-                user.BtcBalance += order.RemainQuantity;
-            }
-
-            // update database
-            _context.Orders.Remove(order);
-            _context.Entry(user).State = EntityState.Modified;
-            await _context.SaveChangesAsync();
-
             return NoContent();
-        }
-
-        private bool OrderExists(int id)
-        {
-            return _context.Orders.Any(e => e.Id == id);
         }
     }
 }

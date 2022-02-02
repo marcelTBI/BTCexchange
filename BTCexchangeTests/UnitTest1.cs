@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -5,7 +6,6 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 using BTCexchange.Controllers;
 using BTCexchange.Models;
-using System.Threading.Tasks;
 
 namespace BTCexchangeTests
 {
@@ -14,8 +14,7 @@ namespace BTCexchangeTests
     {
         public class TestContext : BTCexchangeContext
         {
-            public TestContext(DbContextOptions<BTCexchangeContext> options)
-            : base(options)
+            public TestContext(DbContextOptions<BTCexchangeContext> options) : base(options)
             {
             }
             protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
@@ -32,7 +31,7 @@ namespace BTCexchangeTests
             readonly BalanceController balanceController;
 
             public TestControllers()
-            {                
+            {
                 DbContextOptions<BTCexchangeContext> options = new DbContextOptionsBuilder<BTCexchangeContext>().UseInMemoryDatabase("BTCexchange").Options;
                 TestContext context = new TestContext(options);
                 userController = new UsersController(context)
@@ -55,10 +54,10 @@ namespace BTCexchangeTests
                     {
                         HttpContext = httpContext
                     }
-                }; 
+                };
             }
 
-            public UsersController GetUserController() 
+            public UsersController GetUserController()
             {
                 return userController;
             }
@@ -79,12 +78,12 @@ namespace BTCexchangeTests
 
         [TestMethod]
         public async Task TestBalance()
-        {            
+        {
             // get TestControllers class
             TestControllers tcs = new TestControllers();
 
             // register an User and check if it is there
-            ActionResult<UserDTO> testUserAR = await tcs.GetUserController().PostUser("TestUser");            
+            ActionResult<UserDTO> testUserAR = await tcs.GetUserController().PostUser("TestUser");
             UserDTO? testUser = testUserAR.Value;
             Assert.IsNotNull(testUser);
             Assert.AreEqual("TestUser", testUser.Name);
@@ -99,7 +98,7 @@ namespace BTCexchangeTests
             Assert.IsNotNull(balance);
             Assert.AreEqual(balance.BtcBalance, 5L);
             Assert.AreEqual(balance.UsdBalance, 250000L);
-            Assert.IsTrue(balance.UsdEquivalent > 0L);          
+            Assert.IsTrue(balance.UsdEquivalent > 0L);
         }
 
         [TestMethod]
@@ -114,7 +113,7 @@ namespace BTCexchangeTests
             UserDTO? testUserC = (await tcs.GetUserController().PostUser("C")).Value;
             UserDTO? testUserD = (await tcs.GetUserController().PostUser("D")).Value;
             Assert.IsNotNull(testUserA);
-            Assert.IsNotNull(testUserB);    
+            Assert.IsNotNull(testUserB);
             Assert.IsNotNull(testUserC);
             Assert.IsNotNull(testUserD);
 
@@ -163,8 +162,8 @@ namespace BTCexchangeTests
                 tcs.GetHttpContext().Request.Headers["token"] = testUserC.Token;
                 MarketOrderReturn? mor = (await tcs.GetOrdersController().MarketOrder(15L, "BUY")).Value;
                 Assert.IsNotNull(mor);
-                Assert.IsTrue(mor.quantity == 15L);
-                Assert.IsTrue(mor.avgPrice == 200000L / (double)15L);
+                Assert.IsTrue(mor.Quantity == 15L);
+                Assert.IsTrue(mor.AvgPrice == 200000L / (double)15L);
 
                 tcs.GetHttpContext().Request.Headers["token"] = testUserA.Token;
                 OrderDTO? orderA2 = (await tcs.GetOrdersController().GetOrder(orderIdA.Value)).Value;
@@ -194,7 +193,7 @@ namespace BTCexchangeTests
             OrderDTO? orderDFirst = (await tcs.GetOrdersController().GetOrder(orderIdDFirst.Value)).Value;
             Assert.IsNotNull(orderDFirst);
             Assert.IsTrue(orderDFirst.Status == "LIVE");
-            
+
             // create second (not enough money)
             {
                 int? orderIdD = (await tcs.GetOrdersController().PostOrder(10L, "BUY", 25000L, null)).Value;

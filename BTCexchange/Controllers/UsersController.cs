@@ -1,7 +1,8 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BTCexchange.Models;
 using System.Security.Cryptography;
+
+using BTCexchange.Models;
 
 namespace BTCexchange.Controllers
 {
@@ -9,15 +10,13 @@ namespace BTCexchange.Controllers
     [ApiController]
     public class UsersController : ControllerBase
     {
+        private readonly BTCexchangeContext _context;
 
         public static string RandomToken(int length)
         {
             const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
             return new string(Enumerable.Repeat(chars, length).Select(s => s[RandomNumberGenerator.GetInt32(s.Length)]).ToArray());
         }
-
-
-        private readonly BTCexchangeContext _context;
 
         public UsersController(BTCexchangeContext context)
         {
@@ -62,7 +61,7 @@ namespace BTCexchange.Controllers
         }
 
         // DELETE: api/Users/5
-        [HttpDelete("{id}")]
+        /*[HttpDelete("{id}")]
         public async Task<IActionResult> DeleteUser(int id)
         {
             var user = await _context.Users.FindAsync(id);
@@ -75,12 +74,7 @@ namespace BTCexchange.Controllers
             await _context.SaveChangesAsync();
 
             return NoContent();
-        }
-
-        private bool UserExists(int id)
-        {
-            return _context.Users.Any(e => e.Id == id);
-        }
+        }*/
 
     }
 
@@ -109,7 +103,7 @@ namespace BTCexchange.Controllers
             if (user == null) return NotFound();
 
             // return User's balance
-            return user.ToBalance();
+            return await user.ToBalance();
         }
 
         // POST: api/Balance
@@ -129,29 +123,36 @@ namespace BTCexchange.Controllers
             {
                 case "BTC":
                     {
-                        if (user.BtcBalance + balance >= 0)
+                        lock (OrdersController.orderLock)
                         {
-                            user.BtcBalance += balance;
-                            _context.Entry(user).State = EntityState.Modified;
-                            _context.SaveChanges();
-                            return true;
-                        } else
-                        {
-                            return false;
-                        }                       
+                            if (user.BtcBalance + balance >= 0)
+                            {
+                                user.BtcBalance += balance;
+                                _context.Entry(user).State = EntityState.Modified;
+                                _context.SaveChanges();
+                                return true;
+                            }
+                            else
+                            {
+                                return false;
+                            }
+                        }
                     }
                 case "USD":
                     {
-                        if (user.UsdBalance + balance >= 0)
+                        lock (OrdersController.orderLock)
                         {
-                            user.UsdBalance += balance;
-                            _context.Entry(user).State = EntityState.Modified;
-                            _context.SaveChanges();
-                            return true;
-                        }
-                        else
-                        {
-                            return false;
+                            if (user.UsdBalance + balance >= 0)
+                            {
+                                user.UsdBalance += balance;
+                                _context.Entry(user).State = EntityState.Modified;
+                                _context.SaveChanges();
+                                return true;
+                            }
+                            else
+                            {
+                                return false;
+                            }
                         }
                     }
                 default:

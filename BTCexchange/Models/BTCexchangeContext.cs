@@ -54,7 +54,7 @@ namespace BTCexchange.Models
 
         public async Task<User?> FindUserByToken(string token)
         {
-            return await Users.Where(e => e.Token == token).FirstOrDefaultAsync();            
+            return await Users.Where(e => e.Token == token).FirstOrDefaultAsync();
         }
 
         public static string? GetToken(IHeaderDictionary headers)   // TODO move somewhere more appropriate?

@@ -1,5 +1,4 @@
 ﻿using Newtonsoft.Json.Linq;
-using System.Net;
 using System.Web;
 
 namespace BTCexchange.Models
@@ -17,9 +16,42 @@ namespace BTCexchange.Models
             return new UserDTO(Id, Name, Token, BtcBalance, UsdBalance);
         }
 
-        public BalanceDTO ToBalance()
+        public async static Task<double> GetUsdEquivalent(long btcBalance)
         {
-            return new BalanceDTO(BtcBalance, UsdBalance);
+            string api_key = "8c62ad13-ed99-45cc-8ab9-ebfeffab60f3";
+            var URL = new UriBuilder("https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest");
+
+            var queryString = HttpUtility.ParseQueryString(string.Empty);
+            queryString["symbol"] = "BTC";
+            queryString["convert"] = "USD";
+
+            URL.Query = queryString.ToString();
+
+            var client = new HttpClient();
+
+            using (var request = new HttpRequestMessage(HttpMethod.Get, URL.ToString()))
+            {
+                request.Headers.Add("X-CMC_PRO_API_KEY", api_key);
+                request.Headers.Add("Accepts", "application/json");
+                HttpResponseMessage response = await client.SendAsync(request);
+                response.EnsureSuccessStatusCode();
+                string retJson = await response.Content.ReadAsStringAsync();
+                dynamic jsonReturn = JObject.Parse(retJson);
+                try
+                {
+                    double btcToUsd = Convert.ToDouble(jsonReturn.data.BTC.quote.USD.price);
+                    return btcToUsd * btcBalance;   // TODO Satoshi
+                }
+                catch (Exception)
+                {
+                    throw;
+                }
+            }
+        }
+
+        public async Task<BalanceDTO> ToBalance()
+        {
+            return new BalanceDTO(BtcBalance, UsdBalance, await GetUsdEquivalent(BtcBalance));
         }
     }
 
@@ -47,41 +79,11 @@ namespace BTCexchange.Models
         public long UsdBalance { get; set; }
         public double UsdEquivalent { get; }
 
-        public static double GetUsdEquivalent(long btcBalance)
+        public BalanceDTO(long btcBalance, long usdBalance, double usdEquivalent)
         {
-            string api_key = "8c62ad13-ed99-45cc-8ab9-ebfeffab60f3";
-            var URL = new UriBuilder("https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest");
-
-            var queryString = HttpUtility.ParseQueryString(string.Empty);
-            queryString["symbol"] = "BTC";
-            queryString["convert"] = "USD";
-
-            URL.Query = queryString.ToString();
-
-            var client = new WebClient();
-            client.Headers.Add("X-CMC_PRO_API_KEY", api_key);
-            client.Headers.Add("Accepts", "application/json");
-            // client.Headers.Add("Accept - Encoding", "deflate, gzip");
-            string retJson = client.DownloadString(URL.ToString());
-            dynamic jsonReturn = JObject.Parse(retJson);
-            try
-            {
-                double btcToUsd = Convert.ToDouble(jsonReturn.data.BTC.quote.USD.price);
-                return btcToUsd * btcBalance;   // TODO Satoshi
-            }
-            catch (Exception)
-            {
-                throw;
-            }
-        }
-
-        public BalanceDTO(long btcBalance, long usdBalance, double? usdEquivalent = null)
-        {
-
             BtcBalance = btcBalance;
             UsdBalance = usdBalance;
-            if (usdEquivalent != null) UsdEquivalent = usdEquivalent.Value;
-            else UsdEquivalent = GetUsdEquivalent(BtcBalance);
+            UsdEquivalent = usdEquivalent;            
         }
     }
 }

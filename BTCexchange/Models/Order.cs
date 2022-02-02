@@ -7,7 +7,7 @@
         public long FilledQuantity { get; set; }
         public long RemainQuantity { get; set; }
         public double AvgPrice { get; set; }
-        public string Status { get; set; } = null!;
+        public string Status { get; set; } = "";
         public bool Buying { get; set; }
         public long LimitPrice { get; set; }
         public string? NotifyUrl { get; set; }
@@ -46,13 +46,13 @@
 
     public class MarketOrderReturn
     {
-        public long quantity { get; }
-        public double avgPrice { get; }
+        public long Quantity { get; }
+        public double AvgPrice { get; }
 
         public MarketOrderReturn(long quantity, double avgPrice)
         {
-            this.quantity = quantity;
-            this.avgPrice = avgPrice;
+            this.Quantity = quantity;
+            this.AvgPrice = avgPrice;
         }
     }
 }
